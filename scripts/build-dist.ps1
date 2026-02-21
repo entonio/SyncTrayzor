@@ -14,27 +14,39 @@ $dotnetArch = switch ($arch) {
 }
 $syncthingExe = ".\syncthing\syncthing.exe"
 $publishDir = ".\src\SyncTrayzor\bin\Release\$dotnetTargetSyncTrayzor\$dotnetArch\publish"
+$publishDirFramework = ".\src\SyncTrayzor\bin\Release\$dotnetTargetSyncTrayzor\framework-publish"
 $mergedDir = ".\dist"
+$mergedFrameworkDir = ".\dist-framework"
 
 Write-Host "Building SyncTrayzor for $Variant"
 
-# Clean publish dir first
-if (Test-Path $publishDir) {
-    Remove-Item $publishDir -Recurse -Force
-}
+# Clean publish dirs first
+if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
+if (Test-Path $publishDirFramework) { Remove-Item $publishDirFramework -Recurse -Force }
 
-dotnet publish -c Release -p:DebugType=None -p:DebugSymbols=false -p:SelfContained=true -p:AppConfigVariant=$Variant src/SyncTrayzor/SyncTrayzor.csproj
+# Publish self-contained (existing behaviour)
+dotnet publish -c Release -p:DebugType=None -p:DebugSymbols=false -p:SelfContained=true -r $dotnetArch -p:AppConfigVariant=$Variant -o $publishDir src/SyncTrayzor/SyncTrayzor.csproj
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to build SyncTrayzor. Exiting."
     exit $LASTEXITCODE
 }
 
-# Remove and recreate merged directory
-if (Test-Path $mergedDir) {
-    Remove-Item $mergedDir -Recurse -Force
+# Publish framework-dependent build (requires system .NET runtime)
+dotnet publish -c Release -p:DebugType=None -p:DebugSymbols=false -p:SelfContained=false -p:AppConfigVariant=$Variant -o $publishDirFramework src/SyncTrayzor/SyncTrayzor.csproj
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to build framework-dependent SyncTrayzor. Exiting."
+    exit $LASTEXITCODE
 }
+
+# Remove and recreate merged directory (self-contained)
+if (Test-Path $mergedDir) { Remove-Item $mergedDir -Recurse -Force }
 New-Item -ItemType Directory -Path $mergedDir | Out-Null
 Copy-Item "$publishDir\*" $mergedDir -Recurse -Force
+
+# Also create a framework-dependent dist alongside the self-contained dist
+if (Test-Path $mergedFrameworkDir) { Remove-Item $mergedFrameworkDir -Recurse -Force }
+New-Item -ItemType Directory -Path $mergedFrameworkDir | Out-Null
+Copy-Item "$publishDirFramework\*" $mergedFrameworkDir -Recurse -Force
 
 $additionalFiles = @(
     $syncthingExe,

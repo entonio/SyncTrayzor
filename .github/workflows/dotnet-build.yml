@@ -2,10 +2,10 @@ name: Build
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ "v*" ]
+    branches: ["main"]
+    tags: ["v*"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 jobs:
   build:
     permissions:
@@ -17,41 +17,41 @@ jobs:
     env:
       arch: ${{ matrix.os == 'windows-2022' && 'x64' || (matrix.os == 'windows-11-arm' && 'arm64' || 'unknown') }}
     steps:
-    - name: Checkout
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-      with:
-        fetch-depth: 0
-        
-    - name: Install .NET Core
-      uses: actions/setup-dotnet@2016bd2012dba4e32de620c46fe006a3ac9f0602 # v5
-      with:
-        dotnet-version: 8.0.x
-        
-    - name: Install Task
-      uses: arduino/setup-task@v2
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          fetch-depth: 0
 
-    - name: Run Tests
-      run: task test
-      
-    - name: Build SyncTrayzor (Portable)
-      run: task build-portable
+      - name: Install .NET Core
+        uses: actions/setup-dotnet@2016bd2012dba4e32de620c46fe006a3ac9f0602 # v5
+        with:
+          dotnet-version: 8.0.x
 
-    - name: Upload portable dist
-      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-      with:
-        name: SyncTrayzorPortable-${{ env.arch }}.zip
-        path: ./release/SyncTrayzorPortable-${{ env.arch }}.zip
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Build SyncTrayzor Installer
-      run: task build-installer
+      - name: Run Tests
+        run: task test
 
-    - name: Upload installer dist
-      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-      with:
-        name: SyncTrayzorSetup-${{ env.arch }}.exe
-        path: ./release/SyncTrayzorSetup-${{ env.arch }}.exe
+      - name: Build SyncTrayzor (Portable)
+        run: task build-portable
+
+      - name: Upload portable dist
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: SyncTrayzorPortable-${{ env.arch }}.zip
+          path: ./release/SyncTrayzorPortable-${{ env.arch }}.zip
+
+      - name: Build SyncTrayzor Installer
+        run: task build-installer
+
+      - name: Upload installer dist
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: SyncTrayzorSetup-${{ env.arch }}.exe
+          path: ./release/SyncTrayzorSetup-${{ env.arch }}.exe
   release:
     if: github.ref_type == 'tag'
     needs: build
@@ -59,6 +59,9 @@ jobs:
     permissions:
       contents: write
       discussions: write
+    env:
+      CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -114,6 +117,15 @@ jobs:
           version: ${{ steps.tag_name.outputs.current_version }}
           path: ./CHANGELOG.md
 
+      - name: Get .NET version
+        id: dotnet_version
+        run: |
+          v=$(dotnet --version)
+          # Extract major.minor (e.g. 8.0)
+          runtime=$(echo "$v" | awk -F. '{print $1"."$2}')
+          echo "runtime=$runtime" >> $GITHUB_OUTPUT
+        shell: bash
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
         with:
@@ -131,32 +143,39 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Chocolatey Extensions
+        if: ${{ env.CHOCO_API_KEY != '' }}
         run: choco install chocolatey-community-validation.extension -y
         shell: powershell
 
       - name: Build Chocolatey Package
+        if: ${{ env.CHOCO_API_KEY != '' }}
         run: task build-choco-package
         env:
           SYNCTRAYZOR_VERSION: ${{ steps.changelog_reader.outputs.version }}
-          SYNCTRAYZOR_RELEASE_NOTES: ${{ steps.changelog_reader.outputs.changes }}
+          SYNCTRAYZOR_RELEASE_NOTES: |-
+            ${{ steps.changelog_reader.outputs.changes }}
+
+            Requires .NET ${{ steps.dotnet_version.outputs.runtime }} or later.
 
       - name: Upload choco package
+        if: ${{ env.CHOCO_API_KEY != '' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: ./release/synctrayzor*.nupkg
 
       - name: Push Chocolatey Package
-        if: steps.changelog_reader.outputs.status != 'prereleased' && steps.changelog_reader.outputs.status != 'unreleased'
+        if: ${{ steps.changelog_reader.outputs.status != 'prereleased' && steps.changelog_reader.outputs.status != 'unreleased' && env.CHOCO_API_KEY != '' }}
         run: |
           $packagePath = Get-ChildItem "${{ github.workspace }}/release" -Filter "synctrayzor*.nupkg" | Select-Object -ExpandProperty FullName
-          choco apikey --key ${{ secrets.CHOCO_API_KEY }} --source https://push.chocolatey.org/
+          choco apikey --key ${{ env.CHOCO_API_KEY }} --source https://push.chocolatey.org/
           choco push $packagePath --source https://push.chocolatey.org/
         shell: powershell
 
       - name: Publish to winget
+        if: ${{ env.WINGET_TOKEN != '' && steps.changelog_reader.outputs.status != 'prereleased' && steps.changelog_reader.outputs.status != 'unreleased' }}
         uses: vedantmgoyal9/winget-releaser@main
         with:
           identifier: GermanCoding.SyncTrayzor
           installers-regex: '-x64\.exe$'
           max-versions-to-keep: 5 # keep only latest 5 versions
-          token: ${{ secrets.WINGET_TOKEN }}
+          token: ${{ env.WINGET_TOKEN }}
